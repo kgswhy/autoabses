@@ -2,7 +2,7 @@ name: Auto Attendance UBL
 
 on:
   schedule:
-    - cron: '* * * * *'
+    - cron: '0 * * * *'
   workflow_dispatch:
 
 jobs:
