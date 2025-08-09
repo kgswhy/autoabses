@@ -12,196 +12,123 @@ const CONFIG = {
   UBL_PASSWORD: 'P13032006',
   COURSE_ID: '29050',
   TELEGRAM_BOT_TOKEN: '7950123660:AAFHnzSmAgyNeVLiHfpmBAaitpvE35iFnTk',
-  TELEGRAM_CHAT_ID: '1743712356'
+  TELEGRAM_CHAT_ID: '1743712356',
+  STUDENT_ID: '26710'
 };
 
 function ensureLogDir() {
   try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch {}
 }
 
-function timestamp() {
-  return new Date().toISOString();
-}
+function timestamp() { return new Date().toISOString(); }
 
 function extractJson(text) {
   const jsonMatches = text.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g);
   if (!jsonMatches) return null;
-  
   for (let i = jsonMatches.length - 1; i >= 0; i--) {
     try {
       const parsed = JSON.parse(jsonMatches[i]);
-      if (parsed.courseTitle && parsed.attendance && Array.isArray(parsed.attendance)) {
-        return parsed;
-      }
-    } catch (e) {
-      // Continue to next match
-    }
+      if (parsed.courseTitle && parsed.attendance && Array.isArray(parsed.attendance)) return parsed;
+    } catch {}
   }
   return null;
 }
 
 function sendTelegram(text) {
-  const token = CONFIG.TELEGRAM_BOT_TOKEN;
-  const chatId = CONFIG.TELEGRAM_CHAT_ID;
-  
-  const payload = JSON.stringify({ 
-    chat_id: chatId, 
-    text, 
-    parse_mode: 'HTML', 
-    disable_web_page_preview: true 
-  });
-  
+  const payload = JSON.stringify({ chat_id: CONFIG.TELEGRAM_CHAT_ID, text, parse_mode: 'HTML', disable_web_page_preview: true });
   const req = https.request({
-    hostname: 'api.telegram.org',
-    path: `/bot${token}/sendMessage`,
-    method: 'POST',
-    headers: { 
-      'Content-Type': 'application/json', 
-      'Content-Length': Buffer.byteLength(payload) 
-    }
+    hostname: 'api.telegram.org', path: `/bot${CONFIG.TELEGRAM_BOT_TOKEN}/sendMessage`, method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }
   }, (res) => {
-    let data = '';
-    res.on('data', chunk => data += chunk);
-    res.on('end', () => {
-      if (res.statusCode === 200) {
-        console.log('✅ Telegram sent');
-      } else {
-        console.log(`❌ Telegram API error: ${res.statusCode}`);
-      }
-    });
+    res.on('data', ()=>{});
+    res.on('end', ()=>{ console.log(res.statusCode === 200 ? '✅ Telegram sent' : `❌ Telegram API error: ${res.statusCode}`); });
   });
-  
-  req.on('error', (err) => {
-    console.log(`❌ Telegram error: ${err.message}`);
-  });
-  
-  req.write(payload);
-  req.end();
+  req.on('error', (err) => console.log(`❌ Telegram error: ${err.message}`));
+  req.write(payload); req.end();
 }
 
 function getSessionInfo(url) {
-  // Extract session ID from URL
   const sessionId = url.match(/id=(\d+)/)?.[1] || 'unknown';
-  
-  // Map session IDs to readable names (you can update this based on your course)
-  const sessionNames = {
-    '1377248': 'Session 1 - Introduction',
-    '1377263': 'Session 2 - Basic Concepts', 
-    '1377270': 'Session 3 - Advanced Topics',
-    '1377280': 'Session 4 - Practical Work',
-    '1377288': 'Session 5 - Review',
-    '1377296': 'Session 6 - Assessment',
-    '1377307': 'Session 7 - Final'
+  const names = {
+    '1377248': 'Session 1 - Introduction', '1377263': 'Session 2 - Basic Concepts', '1377270': 'Session 3 - Advanced Topics',
+    '1377280': 'Session 4 - Practical Work', '1377288': 'Session 5 - Review', '1377296': 'Session 6 - Assessment', '1377307': 'Session 7 - Final'
   };
-  
-  return {
-    id: sessionId,
-    name: sessionNames[sessionId] || `Session ${sessionId}`,
-    url: url
-  };
+  return { id: sessionId, name: names[sessionId] || `Session ${sessionId}`, url };
 }
 
 function getAttendanceStatus(attendance) {
-  // Check if attendance has been submitted
-  // This is a simplified check - in reality, we'd need to parse the HTML to see attendance status
-  if (attendance.success) {
-    return '✅ SUBMITTED';
-  } else if (attendance.attempted) {
-    return '❌ FAILED';
-  } else if (attendance.message && attendance.message.includes('No attendance submission form found')) {
-    return '⏳ WAITING (No form)';
-  } else {
-    return '❓ UNKNOWN';
-  }
+  if (attendance.success) return '✅ SUBMITTED';
+  if (attendance.attempted && !attendance.success) return '❌ FAILED';
+  if (attendance.message && attendance.message.includes('No attendance submission form found')) return '⏳ WAITING (No form)';
+  return '❓ UNKNOWN';
 }
 
-function checkAttendanceSummary() {
+function httpGet(pathname) {
+  const cookiesData = JSON.parse(fs.readFileSync('cookies.json', 'utf8'));
+  const cookieHeader = (cookiesData.cookies || []).map(c => c.key + '=' + c.value).join('; ');
   return new Promise((resolve, reject) => {
-    // Load cookies
-    const cookiesData = JSON.parse(fs.readFileSync('cookies.json', 'utf8'));
-    const cookieHeader = cookiesData.cookies.map(c => c.key + '=' + c.value).join('; ');
-    
-    const options = {
-      hostname: 'elearning.budiluhur.ac.id',
-      path: '/my/',
-      method: 'GET',
-      headers: {
-        'Cookie': cookieHeader,
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-      }
-    };
-
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        // Look for attendance summary table
-        const attendanceRows = data.match(/<tr[^>]*>.*?<\/tr>/gis);
-        const attendanceStatus = {};
-        
-        if (attendanceRows) {
-          attendanceRows.forEach(row => {
-            // Look for rows with attendance links
-            const attendanceLink = row.match(/attendance\/view\.php\?id=(\d+)/);
-            if (attendanceLink) {
-              const sessionId = attendanceLink[1];
-              const sessionName = row.match(/Presensi-\d+/)?.[0] || `Session ${sessionId}`;
-              
-              // Check if session is completed
-              const sessionsCompleted = row.match(/<td[^>]*>(\d+)<\/td>/);
-              const points = row.match(/<td[^>]*>(\d+)\s*\/\s*(\d+)<\/td>/);
-              const percentage = row.match(/<td[^>]*>(\d+\.?\d*%)<\/td>/);
-              
-              if (sessionsCompleted && points) {
-                const completed = parseInt(sessionsCompleted[1]);
-                const earned = parseInt(points[1]);
-                const total = parseInt(points[2]);
-                
-                if (completed > 0 && earned > 0) {
-                  attendanceStatus[sessionId] = {
-                    name: sessionName,
-                    status: '✅ COMPLETED',
-                    sessions: completed,
-                    points: `${earned}/${total}`,
-                    percentage: percentage ? percentage[1] : '100%'
-                  };
-                } else {
-                  attendanceStatus[sessionId] = {
-                    name: sessionName,
-                    status: '❌ NOT ATTENDED',
-                    sessions: completed,
-                    points: `${earned}/${total}`,
-                    percentage: percentage ? percentage[1] : '0%'
-                  };
-                }
-              }
-            }
-          });
-        }
-        
-        resolve(attendanceStatus);
-      });
+    const req = https.request({
+      hostname: 'elearning.budiluhur.ac.id', path: pathname, method: 'GET',
+      headers: { 'Cookie': cookieHeader, 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36' }
+    }, (res) => {
+      let data = ''; res.on('data', chunk => data += chunk); res.on('end', () => resolve({ status: res.statusCode, body: data }));
     });
-
-    req.on('error', (err) => {
-      reject(err);
-    });
-
-    req.end();
+    req.on('error', reject); req.end();
   });
+}
+
+function stripHtml(html) {
+  return html
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .trim();
+}
+
+function normalizeHtml(html) {
+  return html.replace(/\r\n|\r|\n/g, ' ').replace(/\s+/g, ' ').replace(/&amp;/g, '&');
+}
+
+async function fetchCourseAttendanceIndexOverview(courseId, studentId) {
+  // Moodle index for attendance instances in a course
+  const path = `/mod/attendance/index.php?id=${courseId}&studentid=${studentId}&view=5`;
+  const { status, body } = await httpGet(path);
+  if (status !== 200) return {};
+  const html = normalizeHtml(body);
+  // Split rows and parse each
+  const rows = html.split(/<tr[^>]*>/i).slice(1).map(r => r.split(/<\/tr>/i)[0]);
+  const result = {};
+  for (const rowHtml of rows) {
+    // Find attendance id in link
+    const idMatch = rowHtml.match(/mod\/attendance\/view\.php\?id=(\d+)/i);
+    if (!idMatch) continue;
+    const id = idMatch[1];
+    // Extract tds
+    const tds = []; const tdRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi; let m;
+    while ((m = tdRegex.exec(rowHtml)) !== null) tds.push(stripHtml(m[1]));
+    if (tds.length < 5) continue;
+    const course = tds[0];
+    const presensi = tds[1];
+    const takenSessions = tds[2];
+    const points = tds[3];
+    const percentage = tds[4];
+    const taken = parseInt(takenSessions || '0', 10) || 0;
+    result[id] = { course, presensi, taken, points, percentage, status: taken > 0 ? '✅ COMPLETED' : '❌ NOT ATTENDED' };
+  }
+  return result;
 }
 
 function summarizeRunOutput(buf) {
   const data = extractJson(buf);
   if (!data) return null;
-  
   if (data.attendance && Array.isArray(data.attendance)) {
     const results = data.attendance.flatMap(a => a.sessions ? a.sessions : [a]);
     const successes = results.filter(r => r && r.success);
     const attempted = results.filter(r => r && r.attempted);
     const failed = results.filter(r => r && !r.success && r.attempted);
     const notAvailable = results.filter(r => r && !r.attempted);
-    
     return {
       courseTitle: data.courseTitle,
       attempted: attempted.length,
@@ -209,215 +136,124 @@ function summarizeRunOutput(buf) {
       failed: failed.length,
       notAvailable: notAvailable.length,
       total: results.length,
-      details: successes.map(s => {
-        const info = getSessionInfo(s.url);
-        return `✔ ${info.name} (ID: ${info.id})`;
-      }).join('\n'),
-      failedDetails: failed.map(f => {
-        const info = getSessionInfo(f.url);
-        return `❌ ${info.name} (ID: ${info.id}) - ${f.message || 'Failed'}`;
-      }).join('\n'),
-      notAvailableDetails: notAvailable.map(n => {
-        const info = getSessionInfo(n.url);
-        return `⏳ ${info.name} (ID: ${info.id}) - ${n.message || 'No form available'}`;
-      }).join('\n'),
-      sessionList: results.map(r => {
-        const info = getSessionInfo(r.url);
-        return {
-          ...info,
-          status: getAttendanceStatus(r),
-          message: r.message || 'Unknown'
-        };
-      })
+      details: successes.map(s => { const info = getSessionInfo(s.url); return `✔ ${info.name} (ID: ${info.id})`; }).join('\n'),
+      failedDetails: failed.map(f => { const info = getSessionInfo(f.url); return `❌ ${info.name} (ID: ${info.id}) - ${f.message || 'Failed'}`; }).join('\n'),
+      notAvailableDetails: notAvailable.map(n => { const info = getSessionInfo(n.url); return `⏳ ${info.name} (ID: ${info.id}) - ${n.message || 'No form available'}`; }).join('\n'),
+      sessionList: results.map(r => { const info = getSessionInfo(r.url); return { ...info, status: getAttendanceStatus(r), message: r.message || 'Unknown' }; })
     };
   }
   return null;
 }
 
 async function runAttendanceCheck() {
-  return new Promise(async (resolve) => {
+  return new Promise((resolve) => {
     console.log(`🔄 Running attendance check...`);
-    
-    try {
-      // First, check attendance summary
-      console.log(`📊 Checking attendance summary...`);
-      const attendanceSummary = await checkAttendanceSummary();
-      
-      const args = ['scrape_ubl.js', '--attend', '--all-attendance'];
-      const proc = spawn('node', args, { 
-        cwd: process.cwd(), 
-        env: {
-          ...process.env,
-          UBL_USERNAME: CONFIG.UBL_USERNAME,
-          UBL_PASSWORD: CONFIG.UBL_PASSWORD,
-          COURSE_ID: CONFIG.COURSE_ID
-        }
-      });
+    const args = ['scrape_ubl.js', '--attend', '--all-attendance'];
+    const proc = spawn('node', args, { cwd: process.cwd(), env: { ...process.env, UBL_USERNAME: CONFIG.UBL_USERNAME, UBL_PASSWORD: CONFIG.UBL_PASSWORD, COURSE_ID: CONFIG.COURSE_ID } });
 
-      let buffer = '';
-      let logData = `\n=== ${timestamp()} ===\n`;
+    let buffer = ''; let logData = `\n=== ${timestamp()} ===\n`;
+    proc.stdout.on('data', (d) => { const data = d.toString(); buffer += data; logData += data; });
+    proc.stderr.on('data', (d) => { const data = d.toString(); buffer += data; logData += data; });
 
-      proc.stdout.on('data', (d) => { 
-        const data = d.toString();
-        buffer += data; 
-        logData += data;
-      });
-      
-      proc.stderr.on('data', (d) => { 
-        const data = d.toString();
-        buffer += data; 
-        logData += data;
-      });
+    proc.on('close', async (code) => {
+      logData += `\n--- exit code: ${code} @ ${timestamp()} ---\n`;
+      fs.appendFileSync(LOG_FILE, logData);
+      console.log(`📊 Completed (exit: ${code})`);
 
-      proc.on('close', async (code) => {
-        logData += `\n--- exit code: ${code} @ ${timestamp()} ---\n`;
-        
-        // Write to log file
-        fs.appendFileSync(LOG_FILE, logData);
-        
-        console.log(`📊 Completed (exit: ${code})`);
-        
-        const summary = summarizeRunOutput(buffer);
-        if (summary) {
-          console.log(`📈 Summary: ${summary.successes}/${summary.total} successful`);
-          
-          const time = new Date().toLocaleString('id-ID', { 
-            timeZone: 'Asia/Jakarta',
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit'
+      const summary = summarizeRunOutput(buffer);
+      if (summary) {
+        console.log(`📈 Summary: ${summary.successes}/${summary.total} successful`);
+        // Fetch index overview once for the course to include completed info
+        const indexOverview = await fetchCourseAttendanceIndexOverview(CONFIG.COURSE_ID, CONFIG.STUDENT_ID);
+
+        const time = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+        let message = `📊 <b>Auto Attendance Report</b>\n\n`;
+        message += `👤 <b>NIM:</b> ${CONFIG.UBL_USERNAME}\n`;
+        message += `📚 <b>Course:</b> ${summary.courseTitle}\n`;
+        message += `⏰ <b>Time:</b> ${time}\n\n`;
+
+        // Attendance summary from index page
+        const overviewIds = Object.keys(indexOverview);
+        if (overviewIds.length > 0) {
+          message += `<b>📋 Attendance Summary:</b>\n`;
+          overviewIds.forEach((id, idx) => {
+            const s = indexOverview[id];
+            message += `${idx + 1}. ${s.presensi}\n`;
+            message += `   ID: ${id}\n`;
+            message += `   Status: ${s.status}\n`;
+            message += `   Sessions: ${s.taken}\n`;
+            message += `   Points: ${s.points}\n`;
+            message += `   Percentage: ${s.percentage}\n\n`;
           });
-          
-          let message = `📊 <b>Auto Attendance Report</b>\n\n`;
-          message += `👤 <b>NIM:</b> ${CONFIG.UBL_USERNAME}\n`;
-          message += `📚 <b>Course:</b> ${summary.courseTitle}\n`;
-          message += `⏰ <b>Time:</b> ${time}\n\n`;
-          
-          // Add attendance summary from my/ page
-          if (Object.keys(attendanceSummary).length > 0) {
-            message += `<b>📋 Attendance Summary:</b>\n`;
-            Object.values(attendanceSummary).forEach((session, index) => {
-              message += `${index + 1}. ${session.name}\n`;
-              message += `   Status: ${session.status}\n`;
-              message += `   Sessions: ${session.sessions}\n`;
-              message += `   Points: ${session.points}\n`;
-              message += `   Percentage: ${session.percentage}\n\n`;
-            });
-          }
-          
-          if (summary.successes > 0) {
-            message += `✅ <b>SUCCESS:</b> ${summary.successes} attendance submitted\n`;
-            if (summary.details) {
-              message += `\n${summary.details}`;
-            }
-          } else if (summary.attempted > 0) {
-            message += `⚠️ <b>ATTEMPTED:</b> ${summary.attempted} sessions tried but failed\n`;
-            if (summary.failedDetails) {
-              message += `\n${summary.failedDetails}`;
-            }
-          } else if (summary.notAvailable > 0) {
-            message += `⏳ <b>WAITING:</b> ${summary.notAvailable} sessions available\n`;
-            message += `\n💡 <i>Menunggu dosen membuka form absensi</i>\n\n`;
-            
-            // Show session details with status
-            message += `<b>📋 Session Status:</b>\n`;
-            summary.sessionList.forEach((session, index) => {
-              message += `${index + 1}. ${session.name}\n`;
-              message += `   ID: ${session.id}\n`;
-              message += `   Status: ${session.status}\n`;
-              if (session.message && session.message !== 'Unknown') {
-                message += `   Note: ${session.message}\n`;
-              }
-              message += `\n`;
-            });
-          } else {
-            message += `ℹ️ <b>NO SESSIONS:</b> Tidak ada sesi attendance yang ditemukan\n`;
-            message += `\n💡 <i>Belum ada jadwal attendance atau sudah selesai</i>`;
-          }
-          
-          message += `\n\n🔄 <i>Next check in 1 minute</i>`;
-          
-          sendTelegram(message);
+        }
+
+        if (summary.successes > 0) {
+          message += `✅ <b>SUCCESS:</b> ${summary.successes} attendance submitted\n`;
+          if (summary.details) message += `\n${summary.details}`;
+        } else if (summary.attempted > 0) {
+          message += `⚠️ <b>ATTEMPTED:</b> ${summary.attempted} sessions tried but failed\n`;
+          if (summary.failedDetails) message += `\n${summary.failedDetails}`;
+        } else if (summary.notAvailable > 0) {
+          message += `⏳ <b>WAITING:</b> ${summary.notAvailable} sessions available\n`;
+          message += `\n💡 <i>Menunggu dosen membuka form absensi</i>\n\n`;
+          message += `<b>📋 Session Status:</b>\n`;
+          summary.sessionList.forEach((session, index) => {
+            message += `${index + 1}. ${session.name}\n`;
+            message += `   ID: ${session.id}\n`;
+            message += `   Status: ${session.status}\n`;
+            if (session.message && session.message !== 'Unknown') message += `   Note: ${session.message}\n`;
+            message += `\n`;
+          });
         } else {
-          console.log('❌ Could not parse output');
-          const time = new Date().toLocaleString('id-ID', { 
-            timeZone: 'Asia/Jakarta',
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit'
-          });
-          
-          let message = `❌ <b>Auto Attendance Error</b>\n\n`;
-          message += `👤 <b>NIM:</b> ${CONFIG.UBL_USERNAME}\n`;
-          message += `⏰ <b>Time:</b> ${time}\n`;
-          message += `\n🔧 <b>Error:</b> Tidak dapat memparse output dari scraper\n`;
-          message += `\n💡 <i>Mungkin ada masalah dengan koneksi atau format data</i>`;
-          
-          sendTelegram(message);
+          message += `ℹ️ <b>NO SESSIONS:</b> Tidak ada sesi attendance yang ditemukan\n`;
+          message += `\n💡 <i>Belum ada jadwal attendance atau sudah selesai</i>`;
         }
-        resolve();
-      });
-      
-      proc.on('error', (err) => {
-        console.log(`❌ Process error: ${err.message}`);
-        const time = new Date().toLocaleString('id-ID', { 
-          timeZone: 'Asia/Jakarta',
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit'
-        });
-        
+
+        message += `\n\n🔄 <i>Next check in 1 minute</i>`;
+        sendTelegram(message);
+      } else {
+        console.log('❌ Could not parse output');
+        const time = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
         let message = `❌ <b>Auto Attendance Error</b>\n\n`;
         message += `👤 <b>NIM:</b> ${CONFIG.UBL_USERNAME}\n`;
         message += `⏰ <b>Time:</b> ${time}\n`;
-        message += `\n🔧 <b>Error:</b> ${err.message}\n`;
-        message += `\n💡 <i>Mungkin ada masalah dengan koneksi atau login</i>`;
-        
+        message += `\n🔧 <b>Error:</b> Tidak dapat memparse output dari scraper\n`;
+        message += `\n💡 <i>Mungkin ada masalah dengan koneksi atau format data</i>`;
         sendTelegram(message);
-        resolve();
-      });
-    } catch (err) {
-      console.log(`❌ Error checking attendance summary: ${err.message}`);
+      }
       resolve();
-    }
+    });
+
+    proc.on('error', (err) => {
+      console.log(`❌ Process error: ${err.message}`);
+      const time = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+      let message = `❌ <b>Auto Attendance Error</b>\n\n`;
+      message += `👤 <b>NIM:</b> ${CONFIG.UBL_USERNAME}\n`;
+      message += `⏰ <b>Time:</b> ${time}\n`;
+      message += `\n🔧 <b>Error:</b> ${err.message}\n`;
+      message += `\n💡 <i>Mungkin ada masalah dengan koneksi atau login</i>`;
+      sendTelegram(message);
+      resolve();
+    });
   });
 }
 
 async function main() {
   ensureLogDir();
-  
   console.log(`🚀 Starting attendance check...`);
   console.log(`📱 Telegram configured: ${CONFIG.TELEGRAM_BOT_TOKEN ? 'Yes' : 'No'}`);
-
-  // Run once and exit
   await runAttendanceCheck();
-  
   console.log('✅ Attendance check completed');
 }
 
 main().catch((e) => {
   console.error('❌ Fatal error:', e.message);
-  const time = new Date().toLocaleString('id-ID', { 
-    timeZone: 'Asia/Jakarta',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
-  });
-  
+  const time = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
   let message = `❌ <b>Auto Attendance Fatal Error</b>\n\n`;
   message += `👤 <b>NIM:</b> ${CONFIG.UBL_USERNAME}\n`;
   message += `⏰ <b>Time:</b> ${time}\n`;
   message += `\n🔧 <b>Error:</b> ${e.message}\n`;
   message += `\n💡 <i>Script mengalami error fatal</i>`;
-  
   sendTelegram(message);
   process.exit(1);
 }); 
