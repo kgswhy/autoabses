@@ -79,6 +79,28 @@ function sendTelegram(text) {
   req.end();
 }
 
+function getSessionInfo(url) {
+  // Extract session ID from URL
+  const sessionId = url.match(/id=(\d+)/)?.[1] || 'unknown';
+  
+  // Map session IDs to readable names (you can update this based on your course)
+  const sessionNames = {
+    '1377248': 'Session 1 - Introduction',
+    '1377263': 'Session 2 - Basic Concepts', 
+    '1377270': 'Session 3 - Advanced Topics',
+    '1377280': 'Session 4 - Practical Work',
+    '1377288': 'Session 5 - Review',
+    '1377296': 'Session 6 - Assessment',
+    '1377307': 'Session 7 - Final'
+  };
+  
+  return {
+    id: sessionId,
+    name: sessionNames[sessionId] || `Session ${sessionId}`,
+    url: url
+  };
+}
+
 function summarizeRunOutput(buf) {
   const data = extractJson(buf);
   if (!data) return null;
@@ -97,9 +119,19 @@ function summarizeRunOutput(buf) {
       failed: failed.length,
       notAvailable: notAvailable.length,
       total: results.length,
-      details: successes.map(s => `✔ ${s.url || ''} ${s.message || ''}`.trim()).join('\n'),
-      failedDetails: failed.map(f => `❌ ${f.url || ''} ${f.message || ''}`.trim()).join('\n'),
-      notAvailableDetails: notAvailable.map(n => `⏳ ${n.url || ''} ${n.message || ''}`.trim()).join('\n')
+      details: successes.map(s => {
+        const info = getSessionInfo(s.url);
+        return `✔ ${info.name} (ID: ${info.id})`;
+      }).join('\n'),
+      failedDetails: failed.map(f => {
+        const info = getSessionInfo(f.url);
+        return `❌ ${info.name} (ID: ${info.id}) - ${f.message || 'Failed'}`;
+      }).join('\n'),
+      notAvailableDetails: notAvailable.map(n => {
+        const info = getSessionInfo(n.url);
+        return `⏳ ${info.name} (ID: ${info.id}) - ${n.message || 'No form available'}`;
+      }).join('\n'),
+      sessionList: notAvailable.map(n => getSessionInfo(n.url))
     };
   }
   return null;
@@ -172,11 +204,16 @@ function runAttendanceCheck() {
             message += `\n${summary.failedDetails}`;
           }
         } else if (summary.notAvailable > 0) {
-          message += `⏳ <b>WAITING:</b> ${summary.notAvailable} sessions available but no submission form\n`;
-          message += `\n💡 <i>Menunggu dosen membuka form absensi</i>\n`;
-          if (summary.notAvailableDetails) {
-            message += `\n${summary.notAvailableDetails}`;
-          }
+          message += `⏳ <b>WAITING:</b> ${summary.notAvailable} sessions available\n`;
+          message += `\n💡 <i>Menunggu dosen membuka form absensi</i>\n\n`;
+          
+          // Show session details
+          message += `<b>📋 Available Sessions:</b>\n`;
+          summary.sessionList.forEach((session, index) => {
+            message += `${index + 1}. ${session.name}\n`;
+            message += `   ID: ${session.id}\n`;
+            message += `   Status: ⏳ No submission form\n\n`;
+          });
         } else {
           message += `ℹ️ <b>NO SESSIONS:</b> Tidak ada sesi attendance yang ditemukan\n`;
           message += `\n💡 <i>Belum ada jadwal attendance atau sudah selesai</i>`;
