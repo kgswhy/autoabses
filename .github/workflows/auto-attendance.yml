@@ -1,0 +1,36 @@
+name: Auto Attendance UBL
+
+on:
+  schedule:
+    # Run every hour
+    - cron: '0 * * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  attendance:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Create .env file
+      run: |
+        echo "UBL_USERNAME=${{ secrets.UBL_USERNAME }}" >> .env
+        echo "UBL_PASSWORD=${{ secrets.UBL_PASSWORD }}" >> .env
+        echo "COURSE_ID=${{ secrets.COURSE_ID }}" >> .env
+        echo "TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}" >> .env
+        echo "TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}" >> .env
+        
+    - name: Run attendance check
+      run: node attendance_check.js
+      timeout-minutes: 5 
