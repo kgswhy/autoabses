@@ -83,15 +83,15 @@ function getSessionInfo(url) {
   // Extract session ID from URL
   const sessionId = url.match(/id=(\d+)/)?.[1] || 'unknown';
   
-  // Map session IDs to readable names (you can update this based on your course)
+  // Map session IDs to readable names based on the table format
   const sessionNames = {
-    '1377248': 'Session 1 - Introduction',
-    '1377263': 'Session 2 - Basic Concepts', 
-    '1377270': 'Session 3 - Advanced Topics',
-    '1377280': 'Session 4 - Practical Work',
-    '1377288': 'Session 5 - Review',
-    '1377296': 'Session 6 - Assessment',
-    '1377307': 'Session 7 - Final'
+    '1377248': 'Presensi-01',
+    '1377263': 'Presensi-02', 
+    '1377270': 'Presensi-03',
+    '1377280': 'Presensi-04',
+    '1377288': 'Presensi-05',
+    '1377296': 'Presensi-06',
+    '1377307': 'Presensi-07'
   };
   
   return {
@@ -112,6 +112,15 @@ function getAttendanceStatus(attendance) {
     return '⏳ WAITING (No form)';
   } else {
     return '❓ UNKNOWN';
+  }
+}
+
+function getAttendancePoints(status) {
+  // Based on the table, if submitted = 100 points, if not = 0 points
+  if (status === '✅ SUBMITTED') {
+    return { points: 100, total: 100, percentage: 100.0 };
+  } else {
+    return { points: 0, total: 0, percentage: null };
   }
 }
 
@@ -147,10 +156,15 @@ function summarizeRunOutput(buf) {
       }).join('\n'),
       sessionList: results.map(r => {
         const info = getSessionInfo(r.url);
+        const status = getAttendanceStatus(r);
+        const points = getAttendancePoints(status);
         return {
           ...info,
-          status: getAttendanceStatus(r),
-          message: r.message || 'Unknown'
+          status: status,
+          message: r.message || 'Unknown',
+          points: points.points,
+          total: points.total,
+          percentage: points.percentage
         };
       })
     };
@@ -234,6 +248,11 @@ function runAttendanceCheck() {
             message += `${index + 1}. ${session.name}\n`;
             message += `   ID: ${session.id}\n`;
             message += `   Status: ${session.status}\n`;
+            if (session.points > 0) {
+              message += `   Points: ${session.points} / ${session.total} (${session.percentage}%)\n`;
+            } else {
+              message += `   Points: 0 / 0 (-)\n`;
+            }
             if (session.message && session.message !== 'Unknown') {
               message += `   Note: ${session.message}\n`;
             }
@@ -242,6 +261,38 @@ function runAttendanceCheck() {
         } else {
           message += `ℹ️ <b>NO SESSIONS:</b> Tidak ada sesi attendance yang ditemukan\n`;
           message += `\n💡 <i>Belum ada jadwal attendance atau sudah selesai</i>`;
+        }
+        
+        // Add summary table
+        if (summary.sessionList.length > 0) {
+          message += `\n📊 <b>ATTENDANCE SUMMARY:</b>\n`;
+          message += `┌─────────────────┬─────────────┬─────────────────────┬─────────────┐\n`;
+          message += `│ Session         │ Status      │ Points              │ Percentage  │\n`;
+          message += `├─────────────────┼─────────────┼─────────────────────┼─────────────┤\n`;
+          
+          summary.sessionList.forEach(session => {
+            const statusIcon = session.status.includes('SUBMITTED') ? '✅' : 
+                             session.status.includes('FAILED') ? '❌' : 
+                             session.status.includes('WAITING') ? '⏳' : '❓';
+            const statusText = session.status.includes('SUBMITTED') ? 'SUBMITTED' :
+                             session.status.includes('FAILED') ? 'FAILED' :
+                             session.status.includes('WAITING') ? 'WAITING' : 'UNKNOWN';
+            const pointsText = session.points > 0 ? `${session.points} / ${session.total}` : '0 / 0';
+            const percentageText = session.percentage ? `${session.percentage}%` : '-';
+            
+            message += `│ ${session.name.padEnd(15)} │ ${statusIcon} ${statusText.padEnd(8)} │ ${pointsText.padEnd(17)} │ ${percentageText.padEnd(9)} │\n`;
+          });
+          
+          message += `└─────────────────┴─────────────┴─────────────────────┴─────────────┘\n`;
+          
+          // Calculate totals
+          const totalSubmitted = summary.sessionList.filter(s => s.status.includes('SUBMITTED')).length;
+          const totalPoints = summary.sessionList.reduce((sum, s) => sum + s.points, 0);
+          const totalPossible = summary.sessionList.length * 100;
+          const overallPercentage = totalPossible > 0 ? ((totalPoints / totalPossible) * 100).toFixed(1) : 0;
+          
+          message += `\n📈 <b>OVERALL:</b> ${totalSubmitted}/${summary.sessionList.length} sessions submitted\n`;
+          message += `🎯 <b>TOTAL POINTS:</b> ${totalPoints}/${totalPossible} (${overallPercentage}%)\n`;
         }
         
         message += `\n\n🔄 <i>Next check in 1 minute</i>`;
