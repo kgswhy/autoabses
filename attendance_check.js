@@ -83,15 +83,15 @@ function getSessionInfo(url) {
   // Extract session ID from URL
   const sessionId = url.match(/id=(\d+)/)?.[1] || 'unknown';
   
-  // Map session IDs to readable names based on the table format
+  // Map session IDs to readable names (you can update this based on your course)
   const sessionNames = {
-    '1377248': 'Presensi-01',
-    '1377263': 'Presensi-02', 
-    '1377270': 'Presensi-03',
-    '1377280': 'Presensi-04',
-    '1377288': 'Presensi-05',
-    '1377296': 'Presensi-06',
-    '1377307': 'Presensi-07'
+    '1377248': 'Session 1 - Introduction',
+    '1377263': 'Session 2 - Basic Concepts', 
+    '1377270': 'Session 3 - Advanced Topics',
+    '1377280': 'Session 4 - Practical Work',
+    '1377288': 'Session 5 - Review',
+    '1377296': 'Session 6 - Assessment',
+    '1377307': 'Session 7 - Final'
   };
   
   return {
@@ -115,13 +115,80 @@ function getAttendanceStatus(attendance) {
   }
 }
 
-function getAttendancePoints(status) {
-  // Based on the table, if submitted = 100 points, if not = 0 points
-  if (status === '✅ SUBMITTED') {
-    return { points: 100, total: 100, percentage: 100.0 };
-  } else {
-    return { points: 0, total: 0, percentage: null };
-  }
+function checkAttendanceSummary() {
+  return new Promise((resolve, reject) => {
+    // Load cookies
+    const cookiesData = JSON.parse(fs.readFileSync('cookies.json', 'utf8'));
+    const cookieHeader = cookiesData.cookies.map(c => c.key + '=' + c.value).join('; ');
+    
+    const options = {
+      hostname: 'elearning.budiluhur.ac.id',
+      path: '/my/',
+      method: 'GET',
+      headers: {
+        'Cookie': cookieHeader,
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        // Look for attendance summary table
+        const attendanceRows = data.match(/<tr[^>]*>.*?<\/tr>/gis);
+        const attendanceStatus = {};
+        
+        if (attendanceRows) {
+          attendanceRows.forEach(row => {
+            // Look for rows with attendance links
+            const attendanceLink = row.match(/attendance\/view\.php\?id=(\d+)/);
+            if (attendanceLink) {
+              const sessionId = attendanceLink[1];
+              const sessionName = row.match(/Presensi-\d+/)?.[0] || `Session ${sessionId}`;
+              
+              // Check if session is completed
+              const sessionsCompleted = row.match(/<td[^>]*>(\d+)<\/td>/);
+              const points = row.match(/<td[^>]*>(\d+)\s*\/\s*(\d+)<\/td>/);
+              const percentage = row.match(/<td[^>]*>(\d+\.?\d*%)<\/td>/);
+              
+              if (sessionsCompleted && points) {
+                const completed = parseInt(sessionsCompleted[1]);
+                const earned = parseInt(points[1]);
+                const total = parseInt(points[2]);
+                
+                if (completed > 0 && earned > 0) {
+                  attendanceStatus[sessionId] = {
+                    name: sessionName,
+                    status: '✅ COMPLETED',
+                    sessions: completed,
+                    points: `${earned}/${total}`,
+                    percentage: percentage ? percentage[1] : '100%'
+                  };
+                } else {
+                  attendanceStatus[sessionId] = {
+                    name: sessionName,
+                    status: '❌ NOT ATTENDED',
+                    sessions: completed,
+                    points: `${earned}/${total}`,
+                    percentage: percentage ? percentage[1] : '0%'
+                  };
+                }
+              }
+            }
+          });
+        }
+        
+        resolve(attendanceStatus);
+      });
+    });
+
+    req.on('error', (err) => {
+      reject(err);
+    });
+
+    req.end();
+  });
 }
 
 function summarizeRunOutput(buf) {
@@ -156,15 +223,10 @@ function summarizeRunOutput(buf) {
       }).join('\n'),
       sessionList: results.map(r => {
         const info = getSessionInfo(r.url);
-        const status = getAttendanceStatus(r);
-        const points = getAttendancePoints(status);
         return {
           ...info,
-          status: status,
-          message: r.message || 'Unknown',
-          points: points.points,
-          total: points.total,
-          percentage: points.percentage
+          status: getAttendanceStatus(r),
+          message: r.message || 'Unknown'
         };
       })
     };
@@ -172,134 +234,136 @@ function summarizeRunOutput(buf) {
   return null;
 }
 
-function runAttendanceCheck() {
-  return new Promise((resolve) => {
+async function runAttendanceCheck() {
+  return new Promise(async (resolve) => {
     console.log(`🔄 Running attendance check...`);
     
-    const args = ['scrape_ubl.js', '--attend', '--all-attendance'];
-    const proc = spawn('node', args, { 
-      cwd: process.cwd(), 
-      env: {
-        ...process.env,
-        UBL_USERNAME: CONFIG.UBL_USERNAME,
-        UBL_PASSWORD: CONFIG.UBL_PASSWORD,
-        COURSE_ID: CONFIG.COURSE_ID
-      }
-    });
-
-    let buffer = '';
-    let logData = `\n=== ${timestamp()} ===\n`;
-
-    proc.stdout.on('data', (d) => { 
-      const data = d.toString();
-      buffer += data; 
-      logData += data;
-    });
-    
-    proc.stderr.on('data', (d) => { 
-      const data = d.toString();
-      buffer += data; 
-      logData += data;
-    });
-
-    proc.on('close', (code) => {
-      logData += `\n--- exit code: ${code} @ ${timestamp()} ---\n`;
+    try {
+      // First, check attendance summary
+      console.log(`📊 Checking attendance summary...`);
+      const attendanceSummary = await checkAttendanceSummary();
       
-      // Write to log file
-      fs.appendFileSync(LOG_FILE, logData);
-      
-      console.log(`📊 Completed (exit: ${code})`);
-      
-      const summary = summarizeRunOutput(buffer);
-      if (summary) {
-        console.log(`📈 Summary: ${summary.successes}/${summary.total} successful`);
-        
-        const time = new Date().toLocaleString('id-ID', { 
-          timeZone: 'Asia/Jakarta',
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit'
-        });
-        
-        let message = `📊 <b>Auto Attendance Report</b>\n\n`;
-        message += `👤 <b>NIM:</b> ${CONFIG.UBL_USERNAME}\n`;
-        message += `📚 <b>Course:</b> ${summary.courseTitle}\n`;
-        message += `⏰ <b>Time:</b> ${time}\n\n`;
-        
-        if (summary.successes > 0) {
-          message += `✅ <b>SUCCESS:</b> ${summary.successes} attendance submitted\n`;
-          if (summary.details) {
-            message += `\n${summary.details}`;
-          }
-        } else if (summary.attempted > 0) {
-          message += `⚠️ <b>ATTEMPTED:</b> ${summary.attempted} sessions tried but failed\n`;
-          if (summary.failedDetails) {
-            message += `\n${summary.failedDetails}`;
-          }
-        } else if (summary.notAvailable > 0) {
-          message += `⏳ <b>WAITING:</b> ${summary.notAvailable} sessions available\n`;
-          message += `\n💡 <i>Menunggu dosen membuka form absensi</i>\n\n`;
-          
-          // Show session details with status
-          message += `<b>📋 Session Status:</b>\n`;
-          summary.sessionList.forEach((session, index) => {
-            message += `${index + 1}. ${session.name}\n`;
-            message += `   ID: ${session.id}\n`;
-            message += `   Status: ${session.status}\n`;
-            if (session.points > 0) {
-              message += `   Points: ${session.points} / ${session.total} (${session.percentage}%)\n`;
-            } else {
-              message += `   Points: 0 / 0 (-)\n`;
-            }
-            if (session.message && session.message !== 'Unknown') {
-              message += `   Note: ${session.message}\n`;
-            }
-            message += `\n`;
-          });
-        } else {
-          message += `ℹ️ <b>NO SESSIONS:</b> Tidak ada sesi attendance yang ditemukan\n`;
-          message += `\n💡 <i>Belum ada jadwal attendance atau sudah selesai</i>`;
+      const args = ['scrape_ubl.js', '--attend', '--all-attendance'];
+      const proc = spawn('node', args, { 
+        cwd: process.cwd(), 
+        env: {
+          ...process.env,
+          UBL_USERNAME: CONFIG.UBL_USERNAME,
+          UBL_PASSWORD: CONFIG.UBL_PASSWORD,
+          COURSE_ID: CONFIG.COURSE_ID
         }
+      });
+
+      let buffer = '';
+      let logData = `\n=== ${timestamp()} ===\n`;
+
+      proc.stdout.on('data', (d) => { 
+        const data = d.toString();
+        buffer += data; 
+        logData += data;
+      });
+      
+      proc.stderr.on('data', (d) => { 
+        const data = d.toString();
+        buffer += data; 
+        logData += data;
+      });
+
+      proc.on('close', async (code) => {
+        logData += `\n--- exit code: ${code} @ ${timestamp()} ---\n`;
         
-        // Add summary table
-        if (summary.sessionList.length > 0) {
-          message += `\n📊 <b>ATTENDANCE SUMMARY:</b>\n`;
-          message += `┌─────────────────┬─────────────┬─────────────────────┬─────────────┐\n`;
-          message += `│ Session         │ Status      │ Points              │ Percentage  │\n`;
-          message += `├─────────────────┼─────────────┼─────────────────────┼─────────────┤\n`;
+        // Write to log file
+        fs.appendFileSync(LOG_FILE, logData);
+        
+        console.log(`📊 Completed (exit: ${code})`);
+        
+        const summary = summarizeRunOutput(buffer);
+        if (summary) {
+          console.log(`📈 Summary: ${summary.successes}/${summary.total} successful`);
           
-          summary.sessionList.forEach(session => {
-            const statusIcon = session.status.includes('SUBMITTED') ? '✅' : 
-                             session.status.includes('FAILED') ? '❌' : 
-                             session.status.includes('WAITING') ? '⏳' : '❓';
-            const statusText = session.status.includes('SUBMITTED') ? 'SUBMITTED' :
-                             session.status.includes('FAILED') ? 'FAILED' :
-                             session.status.includes('WAITING') ? 'WAITING' : 'UNKNOWN';
-            const pointsText = session.points > 0 ? `${session.points} / ${session.total}` : '0 / 0';
-            const percentageText = session.percentage ? `${session.percentage}%` : '-';
+          const time = new Date().toLocaleString('id-ID', { 
+            timeZone: 'Asia/Jakarta',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+          
+          let message = `📊 <b>Auto Attendance Report</b>\n\n`;
+          message += `👤 <b>NIM:</b> ${CONFIG.UBL_USERNAME}\n`;
+          message += `📚 <b>Course:</b> ${summary.courseTitle}\n`;
+          message += `⏰ <b>Time:</b> ${time}\n\n`;
+          
+          // Add attendance summary from my/ page
+          if (Object.keys(attendanceSummary).length > 0) {
+            message += `<b>📋 Attendance Summary:</b>\n`;
+            Object.values(attendanceSummary).forEach((session, index) => {
+              message += `${index + 1}. ${session.name}\n`;
+              message += `   Status: ${session.status}\n`;
+              message += `   Sessions: ${session.sessions}\n`;
+              message += `   Points: ${session.points}\n`;
+              message += `   Percentage: ${session.percentage}\n\n`;
+            });
+          }
+          
+          if (summary.successes > 0) {
+            message += `✅ <b>SUCCESS:</b> ${summary.successes} attendance submitted\n`;
+            if (summary.details) {
+              message += `\n${summary.details}`;
+            }
+          } else if (summary.attempted > 0) {
+            message += `⚠️ <b>ATTEMPTED:</b> ${summary.attempted} sessions tried but failed\n`;
+            if (summary.failedDetails) {
+              message += `\n${summary.failedDetails}`;
+            }
+          } else if (summary.notAvailable > 0) {
+            message += `⏳ <b>WAITING:</b> ${summary.notAvailable} sessions available\n`;
+            message += `\n💡 <i>Menunggu dosen membuka form absensi</i>\n\n`;
             
-            message += `│ ${session.name.padEnd(15)} │ ${statusIcon} ${statusText.padEnd(8)} │ ${pointsText.padEnd(17)} │ ${percentageText.padEnd(9)} │\n`;
+            // Show session details with status
+            message += `<b>📋 Session Status:</b>\n`;
+            summary.sessionList.forEach((session, index) => {
+              message += `${index + 1}. ${session.name}\n`;
+              message += `   ID: ${session.id}\n`;
+              message += `   Status: ${session.status}\n`;
+              if (session.message && session.message !== 'Unknown') {
+                message += `   Note: ${session.message}\n`;
+              }
+              message += `\n`;
+            });
+          } else {
+            message += `ℹ️ <b>NO SESSIONS:</b> Tidak ada sesi attendance yang ditemukan\n`;
+            message += `\n💡 <i>Belum ada jadwal attendance atau sudah selesai</i>`;
+          }
+          
+          message += `\n\n🔄 <i>Next check in 1 minute</i>`;
+          
+          sendTelegram(message);
+        } else {
+          console.log('❌ Could not parse output');
+          const time = new Date().toLocaleString('id-ID', { 
+            timeZone: 'Asia/Jakarta',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
           });
           
-          message += `└─────────────────┴─────────────┴─────────────────────┴─────────────┘\n`;
+          let message = `❌ <b>Auto Attendance Error</b>\n\n`;
+          message += `👤 <b>NIM:</b> ${CONFIG.UBL_USERNAME}\n`;
+          message += `⏰ <b>Time:</b> ${time}\n`;
+          message += `\n🔧 <b>Error:</b> Tidak dapat memparse output dari scraper\n`;
+          message += `\n💡 <i>Mungkin ada masalah dengan koneksi atau format data</i>`;
           
-          // Calculate totals
-          const totalSubmitted = summary.sessionList.filter(s => s.status.includes('SUBMITTED')).length;
-          const totalPoints = summary.sessionList.reduce((sum, s) => sum + s.points, 0);
-          const totalPossible = summary.sessionList.length * 100;
-          const overallPercentage = totalPossible > 0 ? ((totalPoints / totalPossible) * 100).toFixed(1) : 0;
-          
-          message += `\n📈 <b>OVERALL:</b> ${totalSubmitted}/${summary.sessionList.length} sessions submitted\n`;
-          message += `🎯 <b>TOTAL POINTS:</b> ${totalPoints}/${totalPossible} (${overallPercentage}%)\n`;
+          sendTelegram(message);
         }
-        
-        message += `\n\n🔄 <i>Next check in 1 minute</i>`;
-        
-        sendTelegram(message);
-      } else {
-        console.log('❌ Could not parse output');
+        resolve();
+      });
+      
+      proc.on('error', (err) => {
+        console.log(`❌ Process error: ${err.message}`);
         const time = new Date().toLocaleString('id-ID', { 
           timeZone: 'Asia/Jakarta',
           year: 'numeric',
@@ -312,34 +376,16 @@ function runAttendanceCheck() {
         let message = `❌ <b>Auto Attendance Error</b>\n\n`;
         message += `👤 <b>NIM:</b> ${CONFIG.UBL_USERNAME}\n`;
         message += `⏰ <b>Time:</b> ${time}\n`;
-        message += `\n🔧 <b>Error:</b> Tidak dapat memparse output dari scraper\n`;
-        message += `\n💡 <i>Mungkin ada masalah dengan koneksi atau format data</i>`;
+        message += `\n🔧 <b>Error:</b> ${err.message}\n`;
+        message += `\n💡 <i>Mungkin ada masalah dengan koneksi atau login</i>`;
         
         sendTelegram(message);
-      }
-      resolve();
-    });
-    
-    proc.on('error', (err) => {
-      console.log(`❌ Process error: ${err.message}`);
-      const time = new Date().toLocaleString('id-ID', { 
-        timeZone: 'Asia/Jakarta',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit'
+        resolve();
       });
-      
-      let message = `❌ <b>Auto Attendance Error</b>\n\n`;
-      message += `👤 <b>NIM:</b> ${CONFIG.UBL_USERNAME}\n`;
-      message += `⏰ <b>Time:</b> ${time}\n`;
-      message += `\n🔧 <b>Error:</b> ${err.message}\n`;
-      message += `\n💡 <i>Mungkin ada masalah dengan koneksi atau login</i>`;
-      
-      sendTelegram(message);
+    } catch (err) {
+      console.log(`❌ Error checking attendance summary: ${err.message}`);
       resolve();
-    });
+    }
   });
 }
 
