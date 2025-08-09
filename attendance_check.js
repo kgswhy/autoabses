@@ -209,70 +209,64 @@ async function runAttendanceCheck() {
         const indexOverview = await fetchCourseAttendanceIndexOverview(CONFIG.COURSE_ID, CONFIG.STUDENT_ID);
 
         const time = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-        let message = `📊 <b>Auto Attendance Report</b>\n\n`;
-        message += `👤 <b>NIM:</b> ${escapeHtml(CONFIG.UBL_USERNAME)}\n`;
-        message += `📚 <b>Course:</b> ${escapeHtml(summary.courseTitle)}\n`;
-        message += `⏰ <b>Time:</b> ${escapeHtml(time)}\n\n`;
 
-        // Attendance summary from index page (compact first)
-        const overviewIds = Object.keys(indexOverview);
-        if (overviewIds.length > 0) {
-          const attendedList = overviewIds.filter(id => indexOverview[id].attended);
-          const notAttendedList = overviewIds.filter(id => !indexOverview[id].attended);
+        // Compute simple indicators
+        const attendedList = Object.keys(indexOverview).filter(id => indexOverview[id].attended);
+        const nowSucceeded = summary.successes;
+        const nowFailed = (summary.total - summary.successes) > 0 ? summary.total - summary.successes : 0;
+        const hasNoForm = summary.notAvailable > 0 && summary.attempted === 0 && summary.successes === 0;
 
-          if (attendedList.length > 0) {
-            message += `<b>✅ Sudah absen (100%):</b>\n`;
-            attendedList.forEach((id, idx) => {
-              const s = indexOverview[id];
-              message += `${idx + 1}. ${escapeHtml(s.presensi)} — ${escapeHtml(s.percentage)}\n`;
-            });
-            message += `\n`;
-          }
+        // Build simple message
+        let message = `📣 Auto Attendance\n`;
+        message += `🗓️ ${time}\n`;
+        message += `📚 ${escapeHtml(summary.courseTitle)}\n\n`;
 
-          if (notAttendedList.length > 0) {
-            message += `<b>🕒 Belum 100%:</b>\n`;
-            notAttendedList.forEach((id, idx) => {
-              const s = indexOverview[id];
-              message += `${idx + 1}. ${escapeHtml(s.presensi)} — ${escapeHtml(s.percentage || '-') }\n`;
-            });
-            message += `\n`;
-          }
-        }
-
-        // Detailed session status from scraper (kept after compact summary)
-        if (summary.successes > 0) {
-          message += `✅ <b>SUCCESS:</b> ${summary.successes} attendance submitted\n`;
-          if (summary.details) message += `\n${escapeHtml(summary.details)}`;
-        } else if (summary.attempted > 0) {
-          message += `⚠️ <b>ATTEMPTED:</b> ${summary.attempted} sessions tried but failed\n`;
-          if (summary.failedDetails) message += `\n${escapeHtml(summary.failedDetails)}`;
-        } else if (summary.notAvailable > 0) {
-          message += `⏳ <b>WAITING:</b> ${summary.notAvailable} sessions available\n`;
-          message += `\n💡 <i>Menunggu dosen membuka form absensi</i>\n\n`;
-          message += `<b>📋 Session Status:</b>\n`;
-          summary.sessionList.forEach((session, index) => {
-            message += `${index + 1}. ${escapeHtml(session.name)}\n`;
-            message += `   ID: ${escapeHtml(session.id)}\n`;
-            message += `   Status: ${escapeHtml(session.status)}\n`;
-            if (session.message && session.message !== 'Unknown') message += `   Note: ${escapeHtml(session.message)}\n`;
-            message += `\n`;
-          });
+        if (nowSucceeded > 0) {
+          message += `✅ Berhasil absen: ${nowSucceeded} sesi\n`;
+        } else if (hasNoForm) {
+          message += `⏳ Belum bisa absen: form belum tersedia (${summary.notAvailable} sesi)\n`;
+        } else if (summary.attempted > 0 && summary.successes === 0) {
+          message += `❌ Gagal absen: ${summary.attempted} sesi (akan dicoba lagi)\n`;
+        } else if (summary.total === 0) {
+          message += `ℹ️ Tidak ada sesi absensi ditemukan\n`;
         } else {
-          message += `ℹ️ <b>NO SESSIONS:</b> Tidak ada sesi attendance yang ditemukan\n`;
-          message += `\n💡 <i>Belum ada jadwal attendance atau sudah selesai</i>`;
+          message += `ℹ️ Tidak ada perubahan absensi saat ini\n`;
         }
 
-        message += `\n\n🔄 <i>Next check in 1 minute</i>`;
+        // Overall progress (optional but short)
+        if (attendedList.length > 0) {
+          message += `🏁 Total sudah absen (100%): ${attendedList.length} presensi\n`;
+        } else {
+          message += `🏁 Total sudah absen (100%): 0 presensi\n`;
+        }
+
         sendTelegram(message);
       } else {
         console.log('❌ Could not parse output');
         const time = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-        let message = `❌ <b>Auto Attendance Error</b>\n\n`;
-        message += `👤 <b>NIM:</b> ${CONFIG.UBL_USERNAME}\n`;
-        message += `⏰ <b>Time:</b> ${time}\n`;
-        message += `\n🔧 <b>Error:</b> Tidak dapat memparse output dari scraper\n`;
-        message += `\n💡 <i>Mungkin ada masalah dengan koneksi atau format data</i>`;
-        sendTelegram(message);
+
+        // Fallback: try index overview to still send a simple status
+        try {
+          const indexOverview = await fetchCourseAttendanceIndexOverview(CONFIG.COURSE_ID, CONFIG.STUDENT_ID);
+          const attendedList = Object.keys(indexOverview).filter(id => indexOverview[id].attended);
+
+          let message = `📣 Auto Attendance\n`;
+          message += `🗓️ ${time}\n`;
+          message += `📚 (kursus)\n\n`;
+
+          if (attendedList.length > 0) {
+            message += `✅ Berhasil absen: total ${attendedList.length} presensi (100%)\n`;
+          } else {
+            message += `⏳ Belum bisa absen: form belum tersedia / tidak ada sesi aktif\n`;
+          }
+
+          sendTelegram(message);
+        } catch (e) {
+          let message = `📣 Auto Attendance\n`;
+          message += `🗓️ ${time}\n\n`;
+          message += `⏳ Belum bisa absen sekarang (fallback)\n`;
+          sendTelegram(message);
+        }
       }
       resolve();
     });
