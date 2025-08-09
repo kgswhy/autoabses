@@ -2,10 +2,18 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
-require('dotenv').config({ path: path.join(process.cwd(), '.env') });
 
 const LOG_DIR = path.join(process.cwd(), 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'attendance_hourly.log');
+
+// Hardcoded configuration
+const CONFIG = {
+  UBL_USERNAME: '2512510237',
+  UBL_PASSWORD: 'P13032006',
+  COURSE_ID: '29050',
+  TELEGRAM_BOT_TOKEN: '7950123660:AAFHnzSmAgyNeVLiHfpmBAaitpvE35iFnTk',
+  TELEGRAM_CHAT_ID: '1743712356'
+};
 
 function ensureLogDir() {
   try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch {}
@@ -33,12 +41,8 @@ function extractJson(text) {
 }
 
 function sendTelegram(text) {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) {
-    console.log('❌ Telegram not configured');
-    return;
-  }
+  const token = CONFIG.TELEGRAM_BOT_TOKEN;
+  const chatId = CONFIG.TELEGRAM_CHAT_ID;
   
   const payload = JSON.stringify({ 
     chat_id: chatId, 
@@ -98,7 +102,15 @@ function runAttendanceCheck() {
     console.log(`🔄 Running attendance check...`);
     
     const args = ['scrape_ubl.js', '--attend', '--all-attendance'];
-    const proc = spawn('node', args, { cwd: process.cwd(), env: process.env });
+    const proc = spawn('node', args, { 
+      cwd: process.cwd(), 
+      env: {
+        ...process.env,
+        UBL_USERNAME: CONFIG.UBL_USERNAME,
+        UBL_PASSWORD: CONFIG.UBL_PASSWORD,
+        COURSE_ID: CONFIG.COURSE_ID
+      }
+    });
 
     let buffer = '';
     let logData = `\n=== ${timestamp()} ===\n`;
@@ -155,11 +167,7 @@ async function main() {
   ensureLogDir();
   
   console.log(`🚀 Starting attendance check...`);
-  
-  // Check Telegram configuration
-  if (!process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_CHAT_ID) {
-    console.log('⚠️  Warning: Telegram not configured');
-  }
+  console.log(`📱 Telegram configured: ${CONFIG.TELEGRAM_BOT_TOKEN ? 'Yes' : 'No'}`);
 
   // Run once and exit
   await runAttendanceCheck();

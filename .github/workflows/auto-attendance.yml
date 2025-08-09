@@ -23,14 +23,6 @@ jobs:
     - name: Install dependencies
       run: npm ci
       
-    - name: Create .env file
-      run: |
-        echo "UBL_USERNAME=${{ secrets.UBL_USERNAME }}" >> .env
-        echo "UBL_PASSWORD=${{ secrets.UBL_PASSWORD }}" >> .env
-        echo "COURSE_ID=${{ secrets.COURSE_ID }}" >> .env
-        echo "TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}" >> .env
-        echo "TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}" >> .env
-        
     - name: Run attendance check
       run: node attendance_check.js
       timeout-minutes: 5 
