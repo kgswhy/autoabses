@@ -87,11 +87,19 @@ function summarizeRunOutput(buf) {
     const results = data.attendance.flatMap(a => a.sessions ? a.sessions : [a]);
     const successes = results.filter(r => r && r.success);
     const attempted = results.filter(r => r && r.attempted);
+    const failed = results.filter(r => r && !r.success && r.attempted);
+    const notAvailable = results.filter(r => r && !r.attempted);
+    
     return {
       courseTitle: data.courseTitle,
       attempted: attempted.length,
       successes: successes.length,
-      details: successes.map(s => `✔ ${s.url || ''} ${s.message || ''}`.trim()).join('\n')
+      failed: failed.length,
+      notAvailable: notAvailable.length,
+      total: results.length,
+      details: successes.map(s => `✔ ${s.url || ''} ${s.message || ''}`.trim()).join('\n'),
+      failedDetails: failed.map(f => `❌ ${f.url || ''} ${f.message || ''}`.trim()).join('\n'),
+      notAvailableDetails: notAvailable.map(n => `⏳ ${n.url || ''} ${n.message || ''}`.trim()).join('\n')
     };
   }
   return null;
@@ -137,27 +145,86 @@ function runAttendanceCheck() {
       
       const summary = summarizeRunOutput(buffer);
       if (summary) {
-        console.log(`📈 Summary: ${summary.successes}/${summary.attempted} successful`);
+        console.log(`📈 Summary: ${summary.successes}/${summary.total} successful`);
+        
+        const time = new Date().toLocaleString('id-ID', { 
+          timeZone: 'Asia/Jakarta',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+        
+        let message = `📊 <b>Auto Attendance Report</b>\n\n`;
+        message += `👤 <b>NIM:</b> ${CONFIG.UBL_USERNAME}\n`;
+        message += `📚 <b>Course:</b> ${summary.courseTitle}\n`;
+        message += `⏰ <b>Time:</b> ${time}\n\n`;
+        
         if (summary.successes > 0) {
-          const message = `✅ Auto-absen sukses ${summary.successes}/${summary.attempted} pada ${timestamp()}\n${summary.details}`;
-          sendTelegram(message);
+          message += `✅ <b>SUCCESS:</b> ${summary.successes} attendance submitted\n`;
+          if (summary.details) {
+            message += `\n${summary.details}`;
+          }
         } else if (summary.attempted > 0) {
-          const message = `ℹ️ Auto-absen dicoba (${summary.attempted}) namun belum ada yang bisa disubmit (${timestamp()}).`;
-          sendTelegram(message);
+          message += `⚠️ <b>ATTEMPTED:</b> ${summary.attempted} sessions tried but failed\n`;
+          if (summary.failedDetails) {
+            message += `\n${summary.failedDetails}`;
+          }
+        } else if (summary.notAvailable > 0) {
+          message += `⏳ <b>WAITING:</b> ${summary.notAvailable} sessions available but no submission form\n`;
+          message += `\n💡 <i>Menunggu dosen membuka form absensi</i>\n`;
+          if (summary.notAvailableDetails) {
+            message += `\n${summary.notAvailableDetails}`;
+          }
         } else {
-          const message = `⚠️ Auto-absen tidak menemukan sesi yang dapat diikuti (${timestamp()}).`;
-          sendTelegram(message);
+          message += `ℹ️ <b>NO SESSIONS:</b> Tidak ada sesi attendance yang ditemukan\n`;
+          message += `\n💡 <i>Belum ada jadwal attendance atau sudah selesai</i>`;
         }
+        
+        message += `\n\n🔄 <i>Next check in 1 minute</i>`;
+        
+        sendTelegram(message);
       } else {
         console.log('❌ Could not parse output');
-        sendTelegram(`❌ Auto-absen gagal - tidak dapat memparse output (${timestamp()})`);
+        const time = new Date().toLocaleString('id-ID', { 
+          timeZone: 'Asia/Jakarta',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+        
+        let message = `❌ <b>Auto Attendance Error</b>\n\n`;
+        message += `👤 <b>NIM:</b> ${CONFIG.UBL_USERNAME}\n`;
+        message += `⏰ <b>Time:</b> ${time}\n`;
+        message += `\n🔧 <b>Error:</b> Tidak dapat memparse output dari scraper\n`;
+        message += `\n💡 <i>Mungkin ada masalah dengan koneksi atau format data</i>`;
+        
+        sendTelegram(message);
       }
       resolve();
     });
     
     proc.on('error', (err) => {
       console.log(`❌ Process error: ${err.message}`);
-      sendTelegram(`❌ Auto-absen error: ${err.message} (${timestamp()})`);
+      const time = new Date().toLocaleString('id-ID', { 
+        timeZone: 'Asia/Jakarta',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+      
+      let message = `❌ <b>Auto Attendance Error</b>\n\n`;
+      message += `👤 <b>NIM:</b> ${CONFIG.UBL_USERNAME}\n`;
+      message += `⏰ <b>Time:</b> ${time}\n`;
+      message += `\n🔧 <b>Error:</b> ${err.message}\n`;
+      message += `\n💡 <i>Mungkin ada masalah dengan koneksi atau login</i>`;
+      
+      sendTelegram(message);
       resolve();
     });
   });
@@ -177,6 +244,21 @@ async function main() {
 
 main().catch((e) => {
   console.error('❌ Fatal error:', e.message);
-  sendTelegram(`❌ Auto-absen fatal error: ${e.message} (${timestamp()})`);
+  const time = new Date().toLocaleString('id-ID', { 
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+  
+  let message = `❌ <b>Auto Attendance Fatal Error</b>\n\n`;
+  message += `👤 <b>NIM:</b> ${CONFIG.UBL_USERNAME}\n`;
+  message += `⏰ <b>Time:</b> ${time}\n`;
+  message += `\n🔧 <b>Error:</b> ${e.message}\n`;
+  message += `\n💡 <i>Script mengalami error fatal</i>`;
+  
+  sendTelegram(message);
   process.exit(1);
 }); 
