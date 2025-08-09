@@ -101,6 +101,20 @@ function getSessionInfo(url) {
   };
 }
 
+function getAttendanceStatus(attendance) {
+  // Check if attendance has been submitted
+  // This is a simplified check - in reality, we'd need to parse the HTML to see attendance status
+  if (attendance.success) {
+    return '✅ SUBMITTED';
+  } else if (attendance.attempted) {
+    return '❌ FAILED';
+  } else if (attendance.message && attendance.message.includes('No attendance submission form found')) {
+    return '⏳ WAITING (No form)';
+  } else {
+    return '❓ UNKNOWN';
+  }
+}
+
 function summarizeRunOutput(buf) {
   const data = extractJson(buf);
   if (!data) return null;
@@ -131,7 +145,14 @@ function summarizeRunOutput(buf) {
         const info = getSessionInfo(n.url);
         return `⏳ ${info.name} (ID: ${info.id}) - ${n.message || 'No form available'}`;
       }).join('\n'),
-      sessionList: notAvailable.map(n => getSessionInfo(n.url))
+      sessionList: results.map(r => {
+        const info = getSessionInfo(r.url);
+        return {
+          ...info,
+          status: getAttendanceStatus(r),
+          message: r.message || 'Unknown'
+        };
+      })
     };
   }
   return null;
@@ -207,12 +228,16 @@ function runAttendanceCheck() {
           message += `⏳ <b>WAITING:</b> ${summary.notAvailable} sessions available\n`;
           message += `\n💡 <i>Menunggu dosen membuka form absensi</i>\n\n`;
           
-          // Show session details
-          message += `<b>📋 Available Sessions:</b>\n`;
+          // Show session details with status
+          message += `<b>📋 Session Status:</b>\n`;
           summary.sessionList.forEach((session, index) => {
             message += `${index + 1}. ${session.name}\n`;
             message += `   ID: ${session.id}\n`;
-            message += `   Status: ⏳ No submission form\n\n`;
+            message += `   Status: ${session.status}\n`;
+            if (session.message && session.message !== 'Unknown') {
+              message += `   Note: ${session.message}\n`;
+            }
+            message += `\n`;
           });
         } else {
           message += `ℹ️ <b>NO SESSIONS:</b> Tidak ada sesi attendance yang ditemukan\n`;
