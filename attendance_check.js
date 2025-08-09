@@ -40,11 +40,48 @@ function sendTelegram(text) {
     hostname: 'api.telegram.org', path: `/bot${CONFIG.TELEGRAM_BOT_TOKEN}/sendMessage`, method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }
   }, (res) => {
-    res.on('data', ()=>{});
-    res.on('end', ()=>{ console.log(res.statusCode === 200 ? '✅ Telegram sent' : `❌ Telegram API error: ${res.statusCode}`); });
+    let body = '';
+    res.on('data', chunk => body += chunk);
+    res.on('end', () => {
+      try {
+        const parsed = JSON.parse(body);
+        if (res.statusCode === 200 && parsed.ok) {
+          console.log('✅ Telegram sent');
+        } else {
+          console.log(`❌ Telegram API responded with error (status ${res.statusCode}): ${body}`);
+          // Retry without HTML in case of parse_mode errors
+          try {
+            const fallback = JSON.stringify({ chat_id: CONFIG.TELEGRAM_CHAT_ID, text: text.replace(/<[^>]+>/g, ''), disable_web_page_preview: true });
+            const req2 = https.request({
+              hostname: 'api.telegram.org', path: `/bot${CONFIG.TELEGRAM_BOT_TOKEN}/sendMessage`, method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(fallback) }
+            }, (res2) => {
+              let b2 = '';
+              res2.on('data', c => b2 += c);
+              res2.on('end', () => {
+                console.log(res2.statusCode === 200 ? '✅ Telegram fallback sent (plain text)' : `❌ Telegram fallback failed: ${b2}`);
+              });
+            });
+            req2.on('error', (e) => console.log(`❌ Telegram fallback error: ${e.message}`));
+            req2.write(fallback);
+            req2.end();
+          } catch {}
+        }
+      } catch {
+        console.log(`❌ Telegram non-JSON response (status ${res.statusCode}): ${body}`);
+      }
+    });
   });
   req.on('error', (err) => console.log(`❌ Telegram error: ${err.message}`));
   req.write(payload); req.end();
+}
+
+function escapeHtml(s) {
+  if (!s) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 function getSessionInfo(url) {
@@ -114,8 +151,13 @@ async function fetchCourseAttendanceIndexOverview(courseId, studentId) {
     const takenSessions = tds[2];
     const points = tds[3];
     const percentage = tds[4];
-    const taken = parseInt(takenSessions || '0', 10) || 0;
-    result[id] = { course, presensi, taken, points, percentage, status: taken > 0 ? '✅ COMPLETED' : '❌ NOT ATTENDED' };
+
+    // Determine attended by percentage
+    const percentNumber = typeof percentage === 'string' ? parseFloat(percentage.replace('%', '')) : NaN;
+    const attended = !Number.isNaN(percentNumber) && percentNumber >= 100;
+    const statusLabel = attended ? `✅ COMPLETED (${percentage})` : `❌ NOT ATTENDED (${percentage || '-'})`;
+
+    result[id] = { course, presensi, taken: parseInt(takenSessions || '0', 10) || 0, points, percentage, attended, status: statusLabel };
   }
   return result;
 }
@@ -168,40 +210,51 @@ async function runAttendanceCheck() {
 
         const time = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
         let message = `📊 <b>Auto Attendance Report</b>\n\n`;
-        message += `👤 <b>NIM:</b> ${CONFIG.UBL_USERNAME}\n`;
-        message += `📚 <b>Course:</b> ${summary.courseTitle}\n`;
-        message += `⏰ <b>Time:</b> ${time}\n\n`;
+        message += `👤 <b>NIM:</b> ${escapeHtml(CONFIG.UBL_USERNAME)}\n`;
+        message += `📚 <b>Course:</b> ${escapeHtml(summary.courseTitle)}\n`;
+        message += `⏰ <b>Time:</b> ${escapeHtml(time)}\n\n`;
 
-        // Attendance summary from index page
+        // Attendance summary from index page (compact first)
         const overviewIds = Object.keys(indexOverview);
         if (overviewIds.length > 0) {
-          message += `<b>📋 Attendance Summary:</b>\n`;
-          overviewIds.forEach((id, idx) => {
-            const s = indexOverview[id];
-            message += `${idx + 1}. ${s.presensi}\n`;
-            message += `   ID: ${id}\n`;
-            message += `   Status: ${s.status}\n`;
-            message += `   Sessions: ${s.taken}\n`;
-            message += `   Points: ${s.points}\n`;
-            message += `   Percentage: ${s.percentage}\n\n`;
-          });
+          const attendedList = overviewIds.filter(id => indexOverview[id].attended);
+          const notAttendedList = overviewIds.filter(id => !indexOverview[id].attended);
+
+          if (attendedList.length > 0) {
+            message += `<b>✅ Sudah absen (100%):</b>\n`;
+            attendedList.forEach((id, idx) => {
+              const s = indexOverview[id];
+              message += `${idx + 1}. ${escapeHtml(s.presensi)} — ${escapeHtml(s.percentage)}\n`;
+            });
+            message += `\n`;
+          }
+
+          if (notAttendedList.length > 0) {
+            message += `<b>🕒 Belum 100%:</b>\n`;
+            notAttendedList.forEach((id, idx) => {
+              const s = indexOverview[id];
+              message += `${idx + 1}. ${escapeHtml(s.presensi)} — ${escapeHtml(s.percentage || '-') }\n`;
+            });
+            message += `\n`;
+          }
         }
 
+        // Detailed session status from scraper (kept after compact summary)
         if (summary.successes > 0) {
           message += `✅ <b>SUCCESS:</b> ${summary.successes} attendance submitted\n`;
-          if (summary.details) message += `\n${summary.details}`;
+          if (summary.details) message += `\n${escapeHtml(summary.details)}`;
         } else if (summary.attempted > 0) {
           message += `⚠️ <b>ATTEMPTED:</b> ${summary.attempted} sessions tried but failed\n`;
-          if (summary.failedDetails) message += `\n${summary.failedDetails}`;
+          if (summary.failedDetails) message += `\n${escapeHtml(summary.failedDetails)}`;
         } else if (summary.notAvailable > 0) {
           message += `⏳ <b>WAITING:</b> ${summary.notAvailable} sessions available\n`;
           message += `\n💡 <i>Menunggu dosen membuka form absensi</i>\n\n`;
           message += `<b>📋 Session Status:</b>\n`;
           summary.sessionList.forEach((session, index) => {
-            message += `${index + 1}. ${session.name}\n`;
-            message += `   ID: ${session.id}\n`;
-            message += `   Status: ${session.status}\n`;
-            if (session.message && session.message !== 'Unknown') message += `   Note: ${session.message}\n`;
+            message += `${index + 1}. ${escapeHtml(session.name)}\n`;
+            message += `   ID: ${escapeHtml(session.id)}\n`;
+            message += `   Status: ${escapeHtml(session.status)}\n`;
+            if (session.message && session.message !== 'Unknown') message += `   Note: ${escapeHtml(session.message)}\n`;
             message += `\n`;
           });
         } else {
